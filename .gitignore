@@ -1,0 +1,6 @@
+/target
+venv
+.DS_Store
+dict.xml
+synonyms.txt
+.cache

@@ -1,0 +1,64 @@
+[package]
+name = "dupast"
+version = "0.1.0"
+edition = "2024"
+description = "Fast C++ copy-pasta and duplication detector"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/user/dupast"
+readme = "README.md"
+keywords = ["cpp", "linter", "code-quality", "duplication", "static-analysis"]
+categories = ["development-tools", "command-line-utilities"]
+
+[[bin]]
+name = "dupast"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive", "color"] }
+
+# Config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+wincode = { version = "0", features = ["derive"] }
+
+# Performance
+rayon = "1"
+dashmap = "6"
+
+# Similarity & N-gram
+rustc-hash = "2"
+
+# Output (rustc-like)
+indicatif = "0"  # Progress bars for long-running operations
+similar = "2"     # Unified diff generation
+owo-colors = "4"  # ANSI color styling
+
+# Error handling
+thiserror = "2"
+
+# Logging
+tracing = "0"
+tracing-subscriber = { version = "0", features = ["env-filter"] }
+
+# Path handling
+walkdir = "2"
+
+# C++ Parsing (tree-sitter for tokenization)
+tree-sitter = "0"
+tree-sitter-cpp = "0"
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+rustc-hash = "2"
+serde = { version = "1", features = ["derive"] }
+wincode = { version = "0", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
