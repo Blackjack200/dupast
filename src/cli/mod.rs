@@ -3,14 +3,17 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-/// C++ copy-pasta and duplication detector
+/// Multi-language copy-pasta and duplication detector
 #[derive(Parser, Debug, Clone)]
 #[command(name = "dupast")]
 #[command(author = "dupast contributors")]
 #[command(version = "0.1.0")]
-#[command(about = "Detect code duplication in C++ codebases", long_about = None)]
+#[command(
+    about = "Detect code duplication in C++/Rust/Java codebases",
+    long_about = None
+)]
 pub struct Args {
-    /// C++ files/directories to check (default: ".")
+    /// Source files/directories to check (default: ".")
     #[arg(value_name = "PATHS")]
     pub paths: Vec<PathBuf>,
 

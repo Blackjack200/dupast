@@ -2,9 +2,12 @@
 name = "dupast"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Fast C++ copy-pasta and duplication detector"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/user/dupast"
+homepage = "https://github.com/user/dupast"
+documentation = "https://docs.rs/dupast"
 readme = "README.md"
 keywords = ["cpp", "linter", "code-quality", "duplication", "static-analysis"]
 categories = ["development-tools", "command-line-utilities"]
@@ -48,6 +51,8 @@ walkdir = "2"
 # C++ Parsing (tree-sitter for tokenization)
 tree-sitter = "0"
 tree-sitter-cpp = "0"
+tree-sitter-java = "0.23.5"
+tree-sitter-rust = "0.24.0"
 
 [dev-dependencies]
 tempfile = "3"

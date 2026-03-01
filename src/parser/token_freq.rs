@@ -1,4 +1,4 @@
-//! Tree-sitter based tokenizer for C++ code
+//! Tree-sitter based tokenizer for source code
 //!
 //! Extracts and tokenizes individual statements/functions for comparison
 
@@ -10,6 +10,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use tree_sitter::Parser;
 use tree_sitter_cpp as TSCpp;
+use tree_sitter_java as TSJava;
+use tree_sitter_rust as TSRust;
 
 const EMBEDDED_SYNONYMS_BIN: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/embedded_synonyms.wincode"));
@@ -167,6 +169,13 @@ pub struct BlockTokenizer {
     synonym_graph: Option<SynonymGraph>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceLanguage {
+    Cpp,
+    Rust,
+    Java,
+}
+
 impl BlockTokenizer {
     pub fn new(config: &Config) -> Self {
         let ignore_set = [
@@ -317,8 +326,21 @@ impl BlockTokenizer {
 
     /// Extract and tokenize all code blocks from a source file
     pub fn extract_blocks(&self, file_path: &str, source_code: &str) -> Vec<TokenizedBlock> {
+        let Some(language) = detect_language(file_path) else {
+            tracing::debug!("Skipping file with unsupported extension: {}", file_path);
+            return vec![];
+        };
+
         let mut parser = Parser::new();
-        parser.set_language(&TSCpp::LANGUAGE.into()).unwrap();
+        let language_set_result = match language {
+            SourceLanguage::Cpp => parser.set_language(&TSCpp::LANGUAGE.into()),
+            SourceLanguage::Rust => parser.set_language(&TSRust::LANGUAGE.into()),
+            SourceLanguage::Java => parser.set_language(&TSJava::LANGUAGE.into()),
+        };
+        if let Err(e) = language_set_result {
+            tracing::warn!("Failed to set parser language for {}: {}", file_path, e);
+            return vec![];
+        }
 
         let tree = match parser.parse(source_code, None) {
             Some(t) => t,
@@ -332,7 +354,7 @@ impl BlockTokenizer {
         let root = tree.root_node();
 
         // Find function definitions and other top-level declarations
-        self.extract_blocks_from_node(&root, source_code, file_path, &mut blocks);
+        self.extract_blocks_from_node(&root, source_code, file_path, language, &mut blocks);
 
         blocks
     }
@@ -343,23 +365,16 @@ impl BlockTokenizer {
         node: &tree_sitter::Node,
         source: &str,
         file_path: &str,
+        language: SourceLanguage,
         blocks: &mut Vec<TokenizedBlock>,
     ) {
         let kind = node.kind();
 
-        // Extract function definitions as blocks
-        if (kind == "function_definition" || kind == "function_declaration")
-            && let Some(block) = self.tokenize_block(node, source, file_path)
-            && block.total_tokens >= self.min_block_tokens
-        {
-            blocks.push(block);
-        }
-
-        // Also look for compound_statement (function bodies)
-        if kind == "compound_statement" {
+        if is_function_like_node(language, kind) || is_block_node(language, kind) {
+            let min_lines = if is_block_node(language, kind) { 5 } else { 0 };
             let line_count = node.end_position().row - node.start_position().row;
-            if line_count >= 5
-                && let Some(block) = self.tokenize_block(node, source, file_path)
+            if line_count >= min_lines
+                && let Some(block) = self.tokenize_block(node, source, file_path, language)
                 && block.total_tokens >= self.min_block_tokens
             {
                 blocks.push(block);
@@ -369,7 +384,7 @@ impl BlockTokenizer {
         // Recurse into children
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_blocks_from_node(&child, source, file_path, blocks);
+            self.extract_blocks_from_node(&child, source, file_path, language, blocks);
         }
     }
 
@@ -379,12 +394,13 @@ impl BlockTokenizer {
         node: &tree_sitter::Node,
         source: &str,
         file_path: &str,
+        language: SourceLanguage,
     ) -> Option<TokenizedBlock> {
         let mut tokens = Vec::new();
         let mut frequency: FxHashMap<String, usize> = FxHashMap::default();
 
         // Extract tokens from this node
-        self.extract_tokens_from_node(node, source, &mut tokens, &mut frequency);
+        self.extract_tokens_from_node(node, source, language, &mut tokens, &mut frequency);
 
         if tokens.is_empty() {
             return None;
@@ -425,6 +441,7 @@ impl BlockTokenizer {
         &self,
         node: &tree_sitter::Node,
         source: &str,
+        language: SourceLanguage,
         tokens: &mut Vec<String>,
         frequency: &mut FxHashMap<String, usize>,
     ) {
@@ -436,7 +453,7 @@ impl BlockTokenizer {
         }
 
         // Extract identifier tokens
-        if kind == "identifier"
+        if is_identifier_kind(language, kind)
             && let Ok(text) = node.utf8_text(source.as_bytes())
         {
             let trimmed = text.trim();
@@ -456,9 +473,46 @@ impl BlockTokenizer {
         // Recurse into children
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_tokens_from_node(&child, source, tokens, frequency);
+            self.extract_tokens_from_node(&child, source, language, tokens, frequency);
         }
     }
+}
+
+fn detect_language(file_path: &str) -> Option<SourceLanguage> {
+    let ext = std::path::Path::new(file_path)
+        .extension()
+        .and_then(|s| s.to_str())?
+        .to_ascii_lowercase();
+
+    match ext.as_str() {
+        "cpp" | "cc" | "cxx" | "hpp" | "h" | "hxx" => Some(SourceLanguage::Cpp),
+        "rs" => Some(SourceLanguage::Rust),
+        "java" => Some(SourceLanguage::Java),
+        _ => None,
+    }
+}
+
+fn is_function_like_node(language: SourceLanguage, kind: &str) -> bool {
+    match language {
+        SourceLanguage::Cpp => matches!(kind, "function_definition" | "function_declaration"),
+        SourceLanguage::Rust => matches!(kind, "function_item"),
+        SourceLanguage::Java => matches!(kind, "method_declaration" | "constructor_declaration"),
+    }
+}
+
+fn is_block_node(language: SourceLanguage, kind: &str) -> bool {
+    match language {
+        SourceLanguage::Cpp => kind == "compound_statement",
+        SourceLanguage::Rust => kind == "block",
+        SourceLanguage::Java => kind == "block",
+    }
+}
+
+fn is_identifier_kind(_language: SourceLanguage, kind: &str) -> bool {
+    matches!(
+        kind,
+        "identifier" | "type_identifier" | "field_identifier" | "scoped_identifier"
+    )
 }
 
 /// Check if a node kind should be skipped

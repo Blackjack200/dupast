@@ -100,6 +100,8 @@ fn default_extensions() -> Vec<String> {
         "hpp".to_string(),
         "h".to_string(),
         "hxx".to_string(),
+        "rs".to_string(),
+        "java".to_string(),
     ]
 }
 

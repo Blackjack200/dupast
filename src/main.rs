@@ -1,6 +1,6 @@
-//! dupast: C++ copy-pasta and duplication detector
+//! dupast: source code copy-pasta and duplication detector
 //!
-//! Detects repetitive patterns in C++ codebases using statement-level
+//! Detects repetitive patterns in C++/Rust/Java codebases using statement-level
 //! tokenization and frequency-weighted similarity.
 
 mod cli;
@@ -14,7 +14,7 @@ use crate::cli::Args;
 use crate::config::Config;
 use crate::engine::token_engine::TokenEngine;
 use crate::error::{DupastError, Result};
-use crate::parser::Parser as CppParser;
+use crate::parser::Parser as SourceParser;
 use clap::Parser as ClapParser;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -91,14 +91,14 @@ fn run(args: Args) -> Result<bool> {
         vec![PathBuf::from(".")]
     };
 
-    // Discover C++ files
-    let parser = CppParser::new(config.clone());
+    // Discover source files
+    let parser = SourceParser::new(config.clone());
     let files = parser.discover_files(paths.as_slice())?;
 
-    tracing::info!("Found {} C++ file(s) to analyze", files.len());
+    tracing::info!("Found {} source file(s) to analyze", files.len());
 
     if files.is_empty() {
-        eprintln!("No C++ files found in the specified paths");
+        eprintln!("No supported source files found in the specified paths");
         return Ok(false);
     }
 

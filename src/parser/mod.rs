@@ -1,4 +1,4 @@
-//! C++ parsing module
+//! Source parsing module
 
 pub mod synonym_graph;
 pub mod token_freq;
@@ -8,7 +8,7 @@ use crate::error::{DupastError, Result};
 use std::path::PathBuf;
 use walkdir::{DirEntry, WalkDir};
 
-/// Orchestrator for C++ file discovery
+/// Orchestrator for source file discovery
 pub struct Parser {
     config: Config,
 }
@@ -19,7 +19,7 @@ impl Parser {
         Self { config }
     }
 
-    /// Discover all C++ files in the given paths
+    /// Discover all supported source files in the given paths
     pub fn discover_files(&self, paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
 

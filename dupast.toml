@@ -42,11 +42,11 @@ check_intra_file = true
 output_format = "human"
 
 # File extensions to scan
-extensions = ["cpp", "cc", "cxx", "hpp", "h", "hxx"]
+extensions = ["cpp", "cc", "cxx", "hpp", "h", "hxx", "rs", "java"]
 
 # Maximum file size to process in bytes (default: 1MB)
 # Larger files are skipped to avoid memory issues
-max_file_size = 1_048_576
+max_file_size = 33554432
 
 # Number of parallel jobs (default: number of CPU cores)
 # Set to 1 to disable parallelism
@@ -59,7 +59,7 @@ jobs = 0
 # 2.0 = moderate penalty (default) - good for general use
 # 5.0+ = strong penalty - only unique/rare tokens contribute to similarity
 # This helps distinguish structural similarity from common boilerplate code
-frequency_penalty = 2.0
+frequency_penalty = 10.0
 
 # Enable fuzzy identifier matching using semantic vectors
 # When true, detects similarity even when identifiers are renamed
@@ -72,4 +72,4 @@ fuzzy_identifiers = false
 # 0.5 = very permissive (many matches)
 # 0.6 = moderate (default) - balances recall and precision
 # 0.8 = strict (only very similar names)
-fuzzy_identifier_threshold = 0.6
+fuzzy_identifier_threshold = 0.2
