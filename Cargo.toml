@@ -2,12 +2,11 @@
 name = "dupast"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
-description = "Fast C++ copy-pasta and duplication detector"
+description = "Fast C++/rust/java copy-pasta and duplication detector"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/user/dupast"
-homepage = "https://github.com/user/dupast"
-documentation = "https://docs.rs/dupast"
+repository = "https://github.com/Blackjack200/dupast"
+homepage = "https://github.com/Blackjack200/dupast"
+documentation = "https://github.com/Blackjack200/dupast"
 readme = "README.md"
 keywords = ["cpp", "linter", "code-quality", "duplication", "static-analysis"]
 categories = ["development-tools", "command-line-utilities"]
