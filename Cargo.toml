@@ -1,14 +1,13 @@
 [package]
 name = "dupast"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Fast C++/rust/java copy-pasta and duplication detector"
+description = "Fast code duplication detector with Cargo-like ergonomics"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Blackjack200/dupast"
 homepage = "https://github.com/Blackjack200/dupast"
-documentation = "https://github.com/Blackjack200/dupast"
 readme = "README.md"
-keywords = ["cpp", "linter", "code-quality", "duplication", "static-analysis"]
+keywords = ["code-quality", "duplication", "static-analysis"]
 categories = ["development-tools", "command-line-utilities"]
 
 [[bin]]
@@ -18,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive", "color"] }
+clap_complete = "4"
 
 # Config
 serde = { version = "1", features = ["derive"] }
@@ -29,13 +29,13 @@ wincode = { version = "0", features = ["derive"] }
 rayon = "1"
 dashmap = "6"
 
-# Similarity & N-gram
+# Similarity
 rustc-hash = "2"
 
-# Output (rustc-like)
-indicatif = "0"  # Progress bars for long-running operations
-similar = "2"     # Unified diff generation
-owo-colors = "4"  # ANSI color styling
+# Output
+indicatif = "0"
+similar = "2"
+owo-colors = "4"
 
 # Error handling
 thiserror = "2"
@@ -46,12 +46,18 @@ tracing-subscriber = { version = "0", features = ["env-filter"] }
 
 # Path handling
 walkdir = "2"
+dirs = "5"
 
-# C++ Parsing (tree-sitter for tokenization)
+# Language parsing
 tree-sitter = "0"
 tree-sitter-cpp = "0"
 tree-sitter-java = "0.23.5"
 tree-sitter-rust = "0.24.0"
+tree-sitter-php = "0.24.2"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-c = "0.24.1"
+tree-sitter-go = "0.25.0"
 
 [dev-dependencies]
 tempfile = "3"

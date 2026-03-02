@@ -3,6 +3,7 @@
 
 # Similarity threshold (0.0 - 1.0)
 # Pairs with similarity below this threshold will not be reported
+# Can be overridden with: -t <PERCENT> or DUPAST_THRESHOLD env var
 threshold = 0.90
 
 # Paths to scan when no CLI PATHS are provided
@@ -12,7 +13,8 @@ paths = ["src"]
 # Minimum tokens to consider as duplicate code block
 # Blocks (functions, statements) with fewer tokens than this will be ignored
 # Higher values reduce noise for very small functions
-min_block_lines = 25
+# Can be overridden with: -L <N> or DUPAST_MIN_LINES env var
+min_block_lines = 3
 
 # Ignore paths (glob patterns)
 # These paths will be skipped during scanning
@@ -31,25 +33,31 @@ ignore = [
     "third_party/**",
     "external/**",
     "3dparty/**",
+    "target/**",      # Rust build artifacts
+    "node_modules/**", # Node.js dependencies
 ]
 
 # Check intra-file duplication
 # When true, also detects duplicates within the same file
+# Can be overridden with: --no-intra-file flag
 check_intra_file = true
 
 # Output format
 # Options: "human", "json", "sarif"
+# Can be overridden with: -o <FORMAT> or DUPAST_OUTPUT_FORMAT env var
 output_format = "human"
 
 # File extensions to scan
-extensions = ["cpp", "cc", "cxx", "hpp", "h", "hxx", "rs", "java"]
+# Add or remove extensions based on your project
+extensions = ["c", "cpp", "cc", "cxx", "hpp", "h", "hxx", "go", "java", "js", "mjs", "cjs", "php", "rs", "ts", "tsx"]
 
 # Maximum file size to process in bytes (default: 1MB)
 # Larger files are skipped to avoid memory issues
-max_file_size = 33554432
+max_file_size = 1_048_576
 
-# Number of parallel jobs (default: number of CPU cores)
-# Set to 1 to disable parallelism
+# Number of parallel jobs (0 = CPU count)
+# Set to 1 to disable parallelism for debugging
+# Can be overridden with: -j <N> or DUPAST_JOBS env var
 jobs = 0
 
 # Frequency penalty for token similarity (0.0 - 10.0)
@@ -59,12 +67,15 @@ jobs = 0
 # 2.0 = moderate penalty (default) - good for general use
 # 5.0+ = strong penalty - only unique/rare tokens contribute to similarity
 # This helps distinguish structural similarity from common boilerplate code
-frequency_penalty = 10.0
+# Can be overridden with: -F <PENALTY> or DUPAST_FREQUENCY_PENALTY env var
+frequency_penalty = 2.0
 
 # Enable fuzzy identifier matching using semantic vectors
 # When true, detects similarity even when identifiers are renamed
 # Example: calculateSum(a, b) ≈ computeSum(x, y) via semantic similarity
-# Uses 4096-dim character n-gram embeddings for identifier names
+# Uses a 13,000+ word thesaurus for synonym expansion
+# NOTE: Synonym graph (27KB) is only loaded when this is true
+# Can be overridden with: --fuzzy-identifiers flag or DUPAST_FUZZY_IDENTIFIERS env var
 fuzzy_identifiers = false
 
 # Minimum similarity threshold for fuzzy identifier matching (0.0 - 1.0)
@@ -72,4 +83,18 @@ fuzzy_identifiers = false
 # 0.5 = very permissive (many matches)
 # 0.6 = moderate (default) - balances recall and precision
 # 0.8 = strict (only very similar names)
-fuzzy_identifier_threshold = 0.2
+# Can be overridden with: --fuzzy-threshold <THRESHOLD> or DUPAST_FUZZY_THRESHOLD env var
+fuzzy_identifier_threshold = 0.6
+
+# Color output mode
+# Options: "auto", "always", "never"
+# auto: Use colors if output is a terminal (default)
+# always: Always use colors (even when piped)
+# never: Never use colors
+# Can be overridden with: --color <WHEN> or DUPAST_COLOR env var
+# color = "auto"
+
+# Quiet mode (suppress non-error output)
+# When true, only shows warnings/errors, no summary or progress
+# Can be overridden with: -q / --quiet flag or DUPAST_QUIET env var
+# quiet = false

@@ -3,7 +3,7 @@
 //! Builds a synonym graph and calculates similarity via graph traversal
 //! Uses bitmap filtering and inverted indexing for fast pre-filtering
 //! Persists to disk for fast subsequent loads
-//! Lock-free design: read-only graph + DashMap for zero-cost concurrent access
+//! Lock-free design: read-only graph + `DashMap` for zero-cost concurrent access
 
 use dashmap::DashMap;
 use rustc_hash::FxHashMap;
@@ -18,7 +18,7 @@ use std::sync::Mutex;
 /// - First letter (6 bits)
 /// - Length bucket (3 bits: 0-3, 4-6, 7-10, 11-15, 16+)
 /// - Word count (3 bits: 0, 1, 2, 3, 4+)
-/// - Character class flags (4 bits: has_digit, has_underscore, is_uppercase_start, is_camel_case)
+/// - Character class flags (4 bits: `has_digit`, `has_underscore`, `is_uppercase_start`, `is_camel_case`)
 /// - Quick hash bits (48 bits from character hash)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 struct BitmapSignature(u64);
@@ -29,6 +29,7 @@ impl BitmapSignature {
     const UPPERCASE_START: u64 = 1 << 14;
     const CAMEL_CASE: u64 = 1 << 15;
 
+    #[allow(clippy::cast_sign_loss)]
     fn new(identifier: &str) -> Self {
         let mut sig = 0u64;
 
@@ -42,7 +43,7 @@ impl BitmapSignature {
         // First letter bucket (6 bits, fold a-z into 0-25)
         let first_lower = first.to_ascii_lowercase();
         if first_lower.is_ascii_alphabetic() {
-            sig |= (first_lower as u64 - b'a' as u64) & 0x3F;
+            sig |= (u64::from(first_lower) - u64::from(b'a')) & 0x3F;
         }
 
         // Length bucket (3 bits)
@@ -91,13 +92,13 @@ impl BitmapSignature {
 
     /// Fast compatibility check using XOR popcount
     /// Lower score = more similar (0 = identical)
-    fn compatibility(&self, other: BitmapSignature) -> u32 {
+    fn compatibility(self, other: BitmapSignature) -> u32 {
         let diff = self.0 ^ other.0;
         diff.count_ones()
     }
 
     /// Quick check if signatures are compatible enough for full comparison
-    fn is_compatible(&self, other: BitmapSignature, threshold: u32) -> bool {
+    fn is_compatible(self, other: BitmapSignature, threshold: u32) -> bool {
         self.compatibility(other) <= threshold
     }
 }
@@ -109,7 +110,7 @@ struct IndexEntry {
     signature: BitmapSignature,
 }
 
-/// Serializable representation of SynonymGraph (without RwLock caches)
+/// Serializable representation of `SynonymGraph` (without `RwLock` caches)
 #[derive(Debug, Clone, Serialize, Deserialize, wincode::SchemaWrite, wincode::SchemaRead)]
 struct SerializedSynonymGraph {
     graph: FxHashMap<String, Vec<(String, f32)>>,
@@ -137,14 +138,14 @@ impl From<&SynonymGraph> for SerializedSynonymGraph {
 }
 
 /// Synonym graph built from dictionary
-/// Lock-free: uses DashMap for concurrent cache access without RwLock overhead
+/// Lock-free: uses `DashMap` for concurrent cache access without `RwLock` overhead
 #[allow(unused)]
 pub struct SynonymGraph {
     /// Adjacency list: word -> [(synonym, weight)]
     /// Read-only after construction, safe for concurrent reads
     pub graph: FxHashMap<String, Vec<(String, f32)>>,
     /// Cache for split identifiers: identifier -> Vec<word>
-    /// DashMap provides lock-free concurrent access
+    /// `DashMap` provides lock-free concurrent access
     split_cache: DashMap<String, Vec<String>>,
     /// Cache for expanded identifiers: word -> expanded vocabulary
     expand_cache: DashMap<String, FxHashMap<String, f32>>,
@@ -212,6 +213,7 @@ impl SynonymGraph {
     }
 
     /// Get the cache file path for the synonym graph
+    #[allow(dead_code, clippy::map_unwrap_or)] // Caching infrastructure kept for future use
     fn get_cache_path(source_path: &Path) -> std::path::PathBuf {
         let source_name = source_path
             .file_name()
@@ -220,9 +222,8 @@ impl SynonymGraph {
 
         // Use XDG cache directory or current directory
         let cache_dir = std::env::var("XDG_CACHE_HOME")
-            .ok()
             .map(|p| PathBuf::from(p).join("dupast"))
-            .unwrap_or_else(|| {
+            .unwrap_or_else(|_| {
                 let mut path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                 path.push(".cache");
                 path.push("dupast");
@@ -232,15 +233,17 @@ impl SynonymGraph {
         // Create cache directory if it doesn't exist
         fs::create_dir_all(&cache_dir).ok();
 
-        cache_dir.join(format!("{}.wincode", source_name))
+        cache_dir.join(format!("{source_name}.wincode"))
     }
 
     /// Get file modification time for cache invalidation
+    #[allow(dead_code)] // Caching infrastructure kept for future use
     fn get_mtime(path: &Path) -> Option<std::time::SystemTime> {
         fs::metadata(path).ok()?.modified().ok()
     }
 
     /// Load from cached binary file if available and valid, otherwise build from source
+    #[allow(dead_code)] // Caching infrastructure kept for future use
     pub fn load_or_build(source_path: &Path) -> Result<Self, String> {
         let cache_path = Self::get_cache_path(source_path);
 
@@ -273,7 +276,7 @@ impl SynonymGraph {
         // Build from source file
         tracing::info!("Building synonym graph from: {:?}", source_path);
         let data = fs::read_to_string(source_path)
-            .map_err(|e| format!("Failed to read synonyms file: {}", e))?;
+            .map_err(|e| format!("Failed to read synonyms file: {e}"))?;
 
         let graph = Self::from_simple_format(&data);
 
@@ -287,38 +290,44 @@ impl SynonymGraph {
     }
 
     /// Load graph from cached binary file
+    #[allow(dead_code)] // Caching infrastructure kept for future use
     fn load_from_cache(path: &Path) -> Result<Self, String> {
-        let bytes = fs::read(path).map_err(|e| format!("Failed to read cache file: {}", e))?;
+        let bytes = fs::read(path).map_err(|e| format!("Failed to read cache file: {e}"))?;
         Self::from_serialized_bytes(&bytes)
     }
 
     /// Load graph from serialized wincode bytes.
     pub fn from_serialized_bytes(bytes: &[u8]) -> Result<Self, String> {
-        let serialized: SerializedSynonymGraph = wincode::deserialize(bytes)
-            .map_err(|e| format!("Failed to deserialize cache: {}", e))?;
+        let serialized: SerializedSynonymGraph =
+            wincode::deserialize(bytes).map_err(|e| format!("Failed to deserialize cache: {e}"))?;
 
         Ok(SynonymGraph::from(serialized))
     }
 
     /// Save graph to cached binary file
+    #[allow(dead_code)] // Caching infrastructure kept for future use
     fn save_to_cache(&self, path: &Path) -> Result<(), String> {
         let serialized = SerializedSynonymGraph::from(self);
 
         let bytes = wincode::serialize(&serialized)
-            .map_err(|e| format!("Failed to serialize graph: {}", e))?;
+            .map_err(|e| format!("Failed to serialize graph: {e}"))?;
 
-        fs::write(path, bytes).map_err(|e| format!("Failed to write cache file: {}", e))?;
+        fs::write(path, bytes).map_err(|e| format!("Failed to write cache file: {e}"))?;
 
         Ok(())
     }
 
     /// Calculate identifier similarity by comparing expanded vocabularies
     /// Returns all semantically related words with their similarity scores
+    ///
+    /// PERFORMANCE: Clones only on cache miss. Cache hits return cloned data
+    /// but clone is amortized across all subsequent calls.
     pub fn expand_identifier(&self, identifier: &str) -> FxHashMap<String, f32> {
         // Check cache first (DashMap provides lock-free concurrent access)
         let key = identifier.to_lowercase();
         if let Some(cached) = self.expand_cache.get(&key) {
-            return cached.clone();
+            // Clone on cache hit (amortized O(1) across all calls)
+            return cached.value().clone();
         }
 
         let mut expanded = FxHashMap::default();
@@ -367,9 +376,67 @@ impl SynonymGraph {
         }
 
         // Cache result (DashMap is lock-free for concurrent access)
+        // Clone once here for insertion; subsequent reads are also cloned but amortized
         self.expand_cache.insert(key, expanded.clone());
 
         expanded
+    }
+
+    /// Zero-copy variant of `expand_identifier` using callback pattern
+    /// Use this for hot paths to avoid any allocation when cache hits
+    ///
+    /// PERFORMANCE: Zero-copy on cache hit, allocates only on cache miss
+    #[allow(dead_code)] // Kept for potential future optimizations
+    pub fn with_expanded<F, R>(&self, identifier: &str, f: F) -> R
+    where
+        F: FnOnce(&FxHashMap<String, f32>) -> R,
+    {
+        let key = identifier.to_lowercase();
+        if let Some(cached) = self.expand_cache.get(&key) {
+            return f(cached.value());
+        }
+
+        // Compute expanded vocabulary
+        let mut expanded = FxHashMap::default();
+        for word in self.split_identifier(identifier) {
+            let word_lower = word.to_lowercase();
+            expanded.insert(word.clone(), 1.0);
+
+            let mut visited: HashSet<String> = HashSet::new();
+            let mut queue: VecDeque<(String, f32)> = VecDeque::new();
+            queue.push_back((word_lower.clone(), 1.0));
+            visited.insert(word_lower.clone());
+            let mut hops = 0;
+            let max_hops = 2;
+
+            while let Some((current, sim)) = queue.pop_front() {
+                if hops >= max_hops {
+                    hops += 1;
+                    continue;
+                }
+
+                if let Some(neighbors) = self.graph.get(&current) {
+                    for (neighbor, edge_weight) in neighbors {
+                        if !visited.contains(neighbor) && *edge_weight > 0.5 {
+                            let new_sim = sim * edge_weight * 0.9;
+                            if new_sim >= 0.4 {
+                                expanded.insert(neighbor.clone(), new_sim);
+                                visited.insert(neighbor.clone());
+                                if new_sim > 0.7 {
+                                    queue.push_back((neighbor.clone(), new_sim));
+                                }
+                            }
+                        }
+                    }
+                }
+                hops += 1;
+            }
+        }
+
+        // Cache before invoking callback
+        self.expand_cache.insert(key, expanded.clone());
+
+        f(&expanded)
     }
 
     /// Fast identifier similarity check (for early filtering)
@@ -514,7 +581,7 @@ impl SynonymGraph {
     }
 
     /// Query the inverted index to find candidate identifiers that share words
-    /// Returns a HashSet of unique identifiers that share at least one word with the query
+    /// Returns a `HashSet` of unique identifiers that share at least one word with the query
     #[allow(unused)]
     pub fn find_candidates_by_words(&self, identifier: &str) -> HashSet<String> {
         let mut candidates = HashSet::new();
@@ -536,7 +603,10 @@ impl SynonymGraph {
     /// Call this once with all identifiers to enable fast lookups
     #[allow(unused)]
     pub fn build_signature_index(&self, identifiers: &[String]) {
-        let mut index = self.signature_index.lock().unwrap();
+        let mut index = self
+            .signature_index
+            .lock()
+            .expect("signature_index mutex poisoned (thread panicked while holding lock)");
         index.clear();
 
         // Build entries
@@ -558,7 +628,10 @@ impl SynonymGraph {
     #[allow(unused)]
     pub fn find_similar_logn(&self, query: &str, threshold_bits: u32) -> Vec<String> {
         let query_sig = self.get_signature(query);
-        let index = self.signature_index.lock().unwrap();
+        let index = self
+            .signature_index
+            .lock()
+            .expect("signature_index mutex poisoned (thread panicked while holding lock)");
 
         // Binary search for compatible signatures
         // Since signatures are u64, we search for a range around query_sig
@@ -580,7 +653,7 @@ impl SynonymGraph {
         candidates
     }
 
-    /// Split identifier into words (handles camelCase, snake_case)
+    /// Split identifier into words (handles camelCase, `snake_case`)
     fn split_identifier(&self, identifier: &str) -> Vec<String> {
         // Check cache first (DashMap provides lock-free concurrent access)
         let key = identifier.to_lowercase();
@@ -732,7 +805,7 @@ mod tests {
         let graph = SynonymGraph::from_simple_format(data);
 
         // Build a larger index to test O(log n) query
-        let identifiers: Vec<String> = vec![
+        let identifiers: Vec<String> = [
             "getItem",
             "fetchItem",
             "retrieveItem",

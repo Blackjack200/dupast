@@ -1,12 +1,11 @@
 //! Block-based similarity engine using frequency penalty
 //!
 //! Detects duplicated code blocks (functions, statements) across files
-//! Uses bitmap filtering and O(log n) indexed lookup for fast similarity detection
+//! Uses bitmap filtering and O(n²) comparison for fast similarity detection
 
 use crate::config::Config;
 use crate::parser::token_freq::{
-    BlockSignature, BlockTokenizer, TokenizedBlock, block_similarity, block_similarity_fuzzy,
-    blocks_share_tokens,
+    BlockTokenizer, TokenizedBlock, block_similarity, block_similarity_fuzzy, blocks_share_tokens,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -24,13 +23,6 @@ pub struct BlockSimilarPair {
     pub similarity: f64,
 }
 
-/// Indexed block entry for O(log n) binary search
-#[derive(Debug, Clone)]
-struct IndexedBlock {
-    signature: BlockSignature,
-    index: usize, // Index into the blocks array
-}
-
 /// Block-based similarity engine
 pub struct TokenEngine {
     config: Config,
@@ -44,9 +36,11 @@ impl TokenEngine {
     }
 
     /// Run block-based similarity detection
-    pub fn run(&self, files: Vec<std::path::PathBuf>) -> Result<Vec<BlockSimilarPair>, String> {
+    /// Note: Returns Vec directly since this function never fails
+    /// Error handling during extraction is done via logging, not Result
+    pub fn run(&self, files: &[std::path::PathBuf]) -> Vec<BlockSimilarPair> {
         if files.is_empty() {
-            return Ok(Vec::new());
+            return Vec::new();
         }
 
         tracing::info!("Extracting code blocks from {} files", files.len());
@@ -79,17 +73,17 @@ impl TokenEngine {
         tracing::info!("Extracted {} code blocks", blocks.len());
 
         if blocks.is_empty() {
-            return Ok(Vec::new());
+            return Vec::new();
         }
 
         // Find similar block pairs (cross-file only)
-        Ok(self.find_similar_blocks(blocks))
+        self.find_similar_blocks(&blocks)
     }
 
     /// Extract blocks from a single file
     fn extract_blocks_from_file(&self, path: &Path) -> Result<Vec<TokenizedBlock>, String> {
         let source_code =
-            std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {e}"))?;
 
         let blocks = self
             .tokenizer
@@ -98,30 +92,14 @@ impl TokenEngine {
         Ok(blocks)
     }
 
-    /// Find similar block pairs across different files using O(log n) indexed lookup
-    fn find_similar_blocks(&self, blocks: Vec<TokenizedBlock>) -> Vec<BlockSimilarPair> {
+    /// Find similar block pairs across different files using O(n²) comparison
+    fn find_similar_blocks(&self, blocks: &[TokenizedBlock]) -> Vec<BlockSimilarPair> {
         let threshold = self.config.get_threshold();
         let mut pairs = Vec::new();
 
-        tracing::info!(
-            "Building signature index for {} blocks with O(log n) lookup",
-            blocks.len()
-        );
+        tracing::info!("Comparing {} blocks for similarity", blocks.len());
 
-        // Build sorted signature index for O(log n) binary search
-        let mut index: Vec<IndexedBlock> = blocks
-            .iter()
-            .enumerate()
-            .map(|(i, block)| IndexedBlock {
-                signature: block.signature,
-                index: i,
-            })
-            .collect();
-
-        // Sort by signature for binary search
-        index.sort_by_key(|e| e.signature);
-
-        tracing::info!("Comparing blocks using indexed O(log n) lookup");
+        tracing::info!("Comparing blocks using O(n²) scan");
 
         let compare_progress = ProgressBar::new(blocks.len() as u64);
         compare_progress.set_style(
@@ -138,54 +116,58 @@ impl TokenEngine {
             .map(|(i, block_a)| {
                 let mut local_pairs = Vec::new();
 
-                // O(log n): Binary search to find compatible candidates
-                let candidates = self.find_compatible_candidates(block_a, &blocks, &index, i);
-
-                // Only compare with pre-filtered candidates (much fewer than n)
-                for indexed_block in candidates {
-                    let block_b_index = indexed_block.index;
-
-                    // Skip same block (already filtered by find_compatible_candidates)
-                    if i == block_b_index {
+                // Simple O(n) scan: compare with all blocks from different files
+                // For N~300, this is ~90K comparisons which is fast enough
+                for (j, block_b) in blocks.iter().enumerate() {
+                    // Skip same block
+                    if i == j {
                         continue;
                     }
 
-                    let block_b_data = &blocks[block_b_index];
+                    // Skip same file (we only want cross-file comparisons)
+                    if block_a.file_path == block_b.file_path {
+                        continue;
+                    }
 
                     // Skip if both blocks are too small
-                    let min_size = block_a.total_tokens.min(block_b_data.total_tokens);
+                    let min_size = block_a.total_tokens.min(block_b.total_tokens);
                     if min_size < self.config.min_block_lines {
                         continue;
                     }
 
                     // SIZE-BASED FILTERING: Skip if size difference > 50%
-                    let size_ratio = block_a.total_tokens as f64 / block_b_data.total_tokens as f64;
+                    // Use f64 for ratio calculation; precision loss is acceptable for this comparison
+                    #[allow(clippy::cast_precision_loss)] // usize > f64 mantissa is acceptable here
+                    let size_ratio = block_a.total_tokens as f64 / block_b.total_tokens as f64;
                     if !(0.5..=2.0).contains(&size_ratio) {
                         continue;
                     }
 
                     // SIMHASH FILTER: O(1) similarity estimation before expensive operations
                     // Skip if SimHash indicates blocks are too different (max 10 differing bits)
-                    if !block_a.simhash.is_similar(block_b_data.simhash, 10) {
+                    if !block_a.simhash.is_similar(block_b.simhash, 10) {
                         continue;
                     }
 
                     // Quick similarity check from SimHash - skip if estimated similarity is too low
-                    let estimated_sim = block_a.simhash.estimated_similarity(block_b_data.simhash);
+                    let estimated_sim = block_a.simhash.estimated_similarity(block_b.simhash);
                     if estimated_sim < threshold * 0.3 {
                         continue;
                     }
 
                     // TOKEN INTERSECTION FILTER: Quick check for any shared tokens
-                    if !blocks_share_tokens(block_a, block_b_data) {
+                    if !blocks_share_tokens(block_a, block_b) {
                         continue;
                     }
 
                     // TWO-PASS APPROACH: First exact match (fast), then fuzzy (slow)
                     let sim = if self.config.fuzzy_identifiers {
                         // Step 1: Fast exact matching
-                        let exact_sim =
-                            block_similarity(block_a, block_b_data, self.config.frequency_penalty);
+                        let exact_sim = block_similarity(
+                            block_a,
+                            block_b,
+                            self.config.frequency_penalty.as_f64(),
+                        );
 
                         // Step 2: Only do expensive fuzzy matching if exact is moderate
                         // (suggests structural similarity but with renamed identifiers)
@@ -193,8 +175,8 @@ impl TokenEngine {
                             if let Some(synonym_graph) = self.tokenizer.get_synonym_graph() {
                                 block_similarity_fuzzy(
                                     block_a,
-                                    block_b_data,
-                                    self.config.frequency_penalty,
+                                    block_b,
+                                    self.config.frequency_penalty.as_f64(),
                                     synonym_graph,
                                     self.config.fuzzy_identifier_threshold,
                                 )
@@ -205,17 +187,30 @@ impl TokenEngine {
                             exact_sim
                         }
                     } else {
-                        block_similarity(block_a, block_b_data, self.config.frequency_penalty)
+                        block_similarity(block_a, block_b, self.config.frequency_penalty.as_f64())
                     };
+
+                    // Log similarity for debugging (temporarily disabled)
+                    /*
+                    if i == 0 {
+                        if sim >= threshold {
+                            tracing::debug!("  Block 0 vs {} ({:?}): SIMILAR! sim={:.2}",
+                                j, block_b.file_path, sim);
+                        } else {
+                            tracing::debug!("  Block 0 vs {} ({:?}): sim={:.2} < {:.2}",
+                                j, block_b.file_path, sim, threshold);
+                        }
+                    }
+                    */
 
                     if sim >= threshold {
                         local_pairs.push(BlockSimilarPair {
                             file_a: block_a.file_path.clone(),
                             line_start_a: block_a.start_line,
                             line_end_a: block_a.end_line,
-                            file_b: block_b_data.file_path.clone(),
-                            line_start_b: block_b_data.start_line,
-                            line_end_b: block_b_data.end_line,
+                            file_b: block_b.file_path.clone(),
+                            line_start_b: block_b.start_line,
+                            line_end_b: block_b.end_line,
                             similarity: sim,
                         });
                     }
@@ -231,70 +226,35 @@ impl TokenEngine {
             pairs.append(&mut local_pairs);
         }
 
-        // Sort by similarity (descending) and deduplicate
+        // Sort by similarity (descending)
         pairs.sort_by(|a, b| {
             b.similarity
                 .partial_cmp(&a.similarity)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Remove duplicates (A-B and B-A)
-        pairs.dedup_by(|a, b| {
-            a.file_a == b.file_b
-                && a.file_b == b.file_a
-                && a.line_start_a == b.line_start_b
-                && a.line_end_a == b.line_end_b
-        });
+        // Remove duplicates (exact and inverse pairs)
+        // Use HashSet with &str keys - we clone file paths only for deduplication key
+        let mut seen_file_pairs = std::collections::HashSet::new();
+        let mut unique_pairs = Vec::new();
 
-        pairs
-    }
+        for pair in pairs {
+            // Clone only for the dedup key (these are small strings compared to full pairs)
+            let key1 = (pair.file_a.clone(), pair.file_b.clone());
+            let key2 = (pair.file_b.clone(), pair.file_a.clone());
 
-    /// O(log n) binary search to find compatible candidates
-    /// Returns IndexedBlock entries whose signatures are compatible with the query block
-    fn find_compatible_candidates<'a>(
-        &self,
-        query: &TokenizedBlock,
-        blocks: &'a [TokenizedBlock],
-        index: &'a [IndexedBlock],
-        query_index: usize,
-    ) -> Vec<&'a IndexedBlock> {
-        let mut candidates = Vec::new();
-
-        // Binary search for compatible signatures
-        // Since BlockSignature is Ord, we can find a range of compatible signatures
-        let query_sig = query.signature;
-
-        // Search for lower and upper bounds of compatible signatures
-        // We use a tolerance range based on the signature's structural components
-        let start = index.partition_point(|e| e.signature < query_sig);
-        let end = index.partition_point(|e| {
-            e.signature <= query_sig || query_sig.is_compatible(e.signature, 100)
-        });
-
-        // Collect candidates from the reduced range (typically much smaller than n)
-        for entry in &index[start..end] {
-            // Skip self
-            if entry.index == query_index {
-                continue;
+            if seen_file_pairs.contains(&key1) || seen_file_pairs.contains(&key2) {
+                continue; // Already seen this pair or its inverse
             }
 
-            let candidate = &blocks[entry.index];
-
-            // Skip same file (already handled by outer loop, but double-check for safety)
-            if candidate.file_path == query.file_path {
-                continue;
-            }
-
-            // Verify actual signature compatibility before including
-            if query_sig.is_compatible(candidate.signature, 50) {
-                candidates.push(entry);
-            }
+            seen_file_pairs.insert(key1);
+            unique_pairs.push(pair);
         }
 
-        candidates
+        unique_pairs
     }
 
-    /// Get pairs as engine SimilarPair format
+    /// Get pairs as engine `SimilarPair` format
     pub fn to_engine_pairs(pairs: Vec<BlockSimilarPair>) -> Vec<crate::engine::SimilarPair> {
         pairs
             .into_iter()

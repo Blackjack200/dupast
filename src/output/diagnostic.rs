@@ -17,6 +17,7 @@ impl Formatter {
     }
 
     /// Format a single similar pair as a rustc-like warning
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn format_pair(&self, pair: &SimilarPair) -> String {
         let percent = (pair.similarity * 100.0) as u32;
         let mut output = String::new();
@@ -83,6 +84,7 @@ impl Formatter {
     }
 
     /// Format intra-file duplication
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn format_intra_file(&self, dup: &IntraFileDuplication) -> Vec<String> {
         let mut outputs = Vec::new();
 
@@ -150,6 +152,7 @@ impl Formatter {
     }
 
     /// Format a summary
+    #[allow(dead_code)] // Kept for potential future use
     pub fn format_summary(
         &self,
         pairs: &[SimilarPair],
@@ -213,11 +216,16 @@ impl Formatter {
     }
 
     /// Format as JSON
+    #[allow(clippy::items_after_statements)] // use statement intentionally scoped to function
     pub fn format_json(
         &self,
         pairs: &[SimilarPair],
         intra_file: &[IntraFileDuplication],
     ) -> String {
+        // Note: &self is used for accessing use_color, but not directly in this function
+        // Keeping it for API consistency with other format methods
+        let _ = self; // Explicitly acknowledge self is unused for API consistency
+
         use serde_json::json;
 
         let cross_file: Vec<_> = pairs
@@ -276,22 +284,30 @@ impl Formatter {
     }
 
     /// Format as SARIF (Static Analysis Results Interchange Format)
+    #[allow(clippy::items_after_statements)] // use statement intentionally scoped to function
     pub fn format_sarif(
         &self,
         pairs: &[SimilarPair],
         intra_file: &[IntraFileDuplication],
     ) -> String {
+        // Note: &self is used for API consistency; use_color not needed for SARIF
+        let _ = self;
+
         use serde_json::json;
 
         let mut results = Vec::new();
 
         // Cross-file pairs
         for pair in pairs {
+            // Clamp similarity to 0-100% range for display
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let percent = (pair.similarity * 100.0) as u32;
+
             results.push(json!({
                 "ruleId": "code-duplication",
                 "level": "warning",
                 "message": {
-                    "text": format!("Code duplication detected ({}% similarity)", (pair.similarity * 100.0) as u32)
+                    "text": format!("Code duplication detected ({percent}% similarity)")
                 },
                 "locations": [
                     {
@@ -321,11 +337,15 @@ impl Formatter {
         // Intra-file duplications
         for dup in intra_file {
             for pair in &dup.pairs {
+                // Clamp similarity to 0-100% range for display
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let percent = (pair.similarity * 100.0) as u32;
+
                 results.push(json!({
                     "ruleId": "intra-file-duplication",
                     "level": "warning",
                     "message": {
-                        "text": format!("Intra-file duplication detected ({}% similarity)", (pair.similarity * 100.0) as u32)
+                        "text": format!("Intra-file duplication detected ({percent}% similarity)")
                     },
                     "locations": [
                         {
@@ -374,6 +394,7 @@ impl Formatter {
 }
 
 /// Build a unified-style diff body for two source regions.
+#[allow(clippy::items_after_statements)] // const intentionally scoped to function
 fn build_unified_diff_lines(
     file_a: &str,
     range_a: (usize, usize),

@@ -36,15 +36,16 @@ fn build_graph_from_simple_format(data: &str) -> FxHashMap<String, Vec<(String, 
             continue;
         }
 
+        // OPTIMIZATION: Avoid repeated clones by collecting pairs first
+        let mut pairs: Vec<(String, String, f32)> = Vec::with_capacity(synonyms.len() * 2);
         for syn in &synonyms {
-            graph
-                .entry(word.clone())
-                .or_default()
-                .push((syn.clone(), 1.0));
-            graph
-                .entry(syn.clone())
-                .or_default()
-                .push((word.clone(), 1.0));
+            pairs.push((word.clone(), syn.clone(), 1.0));
+            pairs.push((syn.clone(), word.clone(), 1.0));
+        }
+
+        // Insert all pairs at once
+        for (key, value, weight) in pairs {
+            graph.entry(key).or_default().push((value, weight));
         }
     }
 

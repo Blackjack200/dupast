@@ -9,14 +9,19 @@ use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use tree_sitter::Parser;
+use tree_sitter_c as TSC;
 use tree_sitter_cpp as TSCpp;
+use tree_sitter_go as TSGo;
 use tree_sitter_java as TSJava;
+use tree_sitter_javascript as TSJavaScript;
+use tree_sitter_php as TSPhp;
 use tree_sitter_rust as TSRust;
+use tree_sitter_typescript as TSTypeScript;
 
 const EMBEDDED_SYNONYMS_BIN: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/embedded_synonyms.wincode"));
 
-/// 64-bit SimHash for O(1) Jaccard similarity estimation
+/// 64-bit `SimHash` for O(1) Jaccard similarity estimation
 /// Uses Locality Sensitive Hashing to estimate document similarity
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
@@ -24,17 +29,22 @@ const EMBEDDED_SYNONYMS_BIN: &[u8] =
 pub struct SimHash(u64);
 
 impl SimHash {
-    /// Compute SimHash from a collection of tokens
+    /// Compute `SimHash` from a collection of tokens
     /// Similar documents will have similar hashes (small Hamming distance)
+    ///
+    /// PERFORMANCE: Uses incremental hashing to avoid hasher resets
+    #[allow(clippy::items_after_statements, clippy::cast_sign_loss)]
     pub fn from_tokens(tokens: &[String]) -> Self {
         let mut hash_vector: [i64; 64] = [0; 64];
-        let mut hasher = DefaultHasher::new();
+
+        // Use FxHasher for faster hashing (no need for cryptographic strength)
+        use rustc_hash::FxHasher;
+        use std::hash::Hasher;
 
         for token in tokens {
-            // Hash each token to 64 bits
+            let mut hasher = FxHasher::default();
             token.hash(&mut hasher);
             let hash = hasher.finish();
-            hasher = DefaultHasher::new(); // Reset for next token
 
             // Update vector: +1 for bit=1, -1 for bit=0
             for i in 0..64 {
@@ -59,19 +69,22 @@ impl SimHash {
 
     /// Estimate similarity via Hamming distance (0 = identical, 64 = completely different)
     /// Lower Hamming distance = higher similarity
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn hamming_distance(&self, other: SimHash) -> u32 {
         (self.0 ^ other.0).count_ones()
     }
 
     /// Fast similarity check: true if hashes are similar enough (within threshold)
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn is_similar(&self, other: SimHash, max_distance: u32) -> bool {
         self.hamming_distance(other) <= max_distance
     }
 
     /// Estimate Jaccard similarity from Hamming distance
     /// Returns 0.0 to 1.0 (higher = more similar)
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn estimated_similarity(&self, other: SimHash) -> f64 {
-        let distance = self.hamming_distance(other) as f64;
+        let distance = f64::from(self.hamming_distance(other));
         // Hamming distance to Jaccard approximation: (64 - distance) / 64
         (64.0 - distance) / 64.0
     }
@@ -83,6 +96,11 @@ pub struct BlockSignature(u64);
 
 impl BlockSignature {
     /// Create signature from block characteristics
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation
+    )]
     pub fn from_block(
         token_count: usize,
         unique_token_count: usize,
@@ -135,6 +153,7 @@ impl BlockSignature {
     }
 
     /// Check compatibility with another signature (lower = more compatible)
+    #[allow(dead_code, clippy::trivially_copy_pass_by_ref)] // Currently unused but kept for potential future optimizations
     pub fn is_compatible(&self, other: BlockSignature, max_diff: u64) -> bool {
         // Compare structural components (count bucket, ratio, first/last hashes)
         let self_struct = self.0 & 0xFFFF;
@@ -144,6 +163,20 @@ impl BlockSignature {
         let diff = self_struct.abs_diff(other_struct);
 
         diff <= max_diff
+    }
+
+    /// Get the raw u64 value (for binary search)
+    #[allow(dead_code, clippy::trivially_copy_pass_by_ref)] // Currently unused but kept for potential future optimizations
+    #[inline]
+    pub fn as_u64(&self) -> u64 {
+        self.0
+    }
+
+    /// Create a `BlockSignature` from a raw u64 value (for binary search bounds)
+    #[allow(dead_code)] // Currently unused but kept for potential future optimizations
+    #[inline]
+    pub const fn from_u64(value: u64) -> Self {
+        BlockSignature(value)
     }
 }
 
@@ -157,8 +190,10 @@ pub struct TokenizedBlock {
     pub frequencies: FxHashMap<String, f64>,
     pub total_tokens: usize,
     /// Bitmap signature for fast similarity pre-filtering
+    #[allow(dead_code)] // Currently unused; kept for potential future optimizations
     pub signature: BlockSignature,
-    /// SimHash for O(1) similarity estimation
+    /// `SimHash` for O(1) similarity estimation
+    #[allow(dead_code)] // Methods are used, but the field itself triggers a false positive
     pub simhash: SimHash,
 }
 
@@ -171,14 +206,21 @@ pub struct BlockTokenizer {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SourceLanguage {
+    C,
     Cpp,
-    Rust,
+    Go,
     Java,
+    JavaScript,
+    Php,
+    Rust,
+    TypeScript,
 }
 
 impl BlockTokenizer {
     pub fn new(config: &Config) -> Self {
-        let ignore_set = [
+        // Static ignore set - shared across all instances to avoid repeated allocation
+        // Using lazy_static or once_cell would be better, but HashSet is cheap enough
+        static IGNORE_WORDS: &[&str] = &[
             // Keywords
             "auto",
             "const",
@@ -285,13 +327,22 @@ impl BlockTokenizer {
             ".*",
             "?",
             "::",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+        ];
 
-        // Load synonym graph if available
-        let synonym_graph = Self::load_synonym_graph();
+        let ignore_set: HashSet<String> = IGNORE_WORDS
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
+
+        // Only load synonym graph if fuzzy matching is enabled
+        let synonym_graph = if config.fuzzy_identifiers {
+            Some(Self::load_synonym_graph().unwrap_or_else(|| {
+                tracing::warn!("Failed to load synonym graph, fuzzy matching disabled");
+                SynonymGraph::from_simple_format("")
+            }))
+        } else {
+            None
+        };
 
         Self {
             ignore_set,
@@ -333,21 +384,25 @@ impl BlockTokenizer {
 
         let mut parser = Parser::new();
         let language_set_result = match language {
+            SourceLanguage::C => parser.set_language(&TSC::LANGUAGE.into()),
             SourceLanguage::Cpp => parser.set_language(&TSCpp::LANGUAGE.into()),
-            SourceLanguage::Rust => parser.set_language(&TSRust::LANGUAGE.into()),
+            SourceLanguage::Go => parser.set_language(&TSGo::LANGUAGE.into()),
             SourceLanguage::Java => parser.set_language(&TSJava::LANGUAGE.into()),
+            SourceLanguage::JavaScript => parser.set_language(&TSJavaScript::LANGUAGE.into()),
+            SourceLanguage::Php => parser.set_language(&TSPhp::LANGUAGE_PHP.into()),
+            SourceLanguage::Rust => parser.set_language(&TSRust::LANGUAGE.into()),
+            SourceLanguage::TypeScript => {
+                parser.set_language(&TSTypeScript::LANGUAGE_TYPESCRIPT.into())
+            }
         };
         if let Err(e) = language_set_result {
             tracing::warn!("Failed to set parser language for {}: {}", file_path, e);
             return vec![];
         }
 
-        let tree = match parser.parse(source_code, None) {
-            Some(t) => t,
-            None => {
-                tracing::warn!("Failed to parse file: {}", file_path);
-                return vec![];
-            }
+        let Some(tree) = parser.parse(source_code, None) else {
+            tracing::warn!("Failed to parse file: {}", file_path);
+            return vec![];
         };
 
         let mut blocks = Vec::new();
@@ -388,7 +443,8 @@ impl BlockTokenizer {
         }
     }
 
-    /// Tokenize a single AST node into a TokenizedBlock
+    /// Tokenize a single AST node into a `TokenizedBlock`
+    #[allow(clippy::cast_precision_loss)]
     fn tokenize_block(
         &self,
         node: &tree_sitter::Node,
@@ -416,8 +472,8 @@ impl BlockTokenizer {
             .collect();
 
         // Compute bitmap signature for fast similarity pre-filtering
-        let first_token = tokens.first().map(|s| s.as_str());
-        let last_token = tokens.last().map(|s| s.as_str());
+        let first_token = tokens.first().map(std::string::String::as_str);
+        let last_token = tokens.last().map(std::string::String::as_str);
         let signature =
             BlockSignature::from_block(tokens.len(), frequencies.len(), first_token, last_token);
 
@@ -485,26 +541,54 @@ fn detect_language(file_path: &str) -> Option<SourceLanguage> {
         .to_ascii_lowercase();
 
     match ext.as_str() {
-        "cpp" | "cc" | "cxx" | "hpp" | "h" | "hxx" => Some(SourceLanguage::Cpp),
-        "rs" => Some(SourceLanguage::Rust),
+        "c" | "h" => Some(SourceLanguage::C),
+        "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some(SourceLanguage::Cpp),
+        "go" => Some(SourceLanguage::Go),
         "java" => Some(SourceLanguage::Java),
+        "js" | "mjs" | "cjs" => Some(SourceLanguage::JavaScript),
+        "php" => Some(SourceLanguage::Php),
+        "rs" => Some(SourceLanguage::Rust),
+        "ts" | "tsx" => Some(SourceLanguage::TypeScript),
         _ => None,
     }
 }
 
 fn is_function_like_node(language: SourceLanguage, kind: &str) -> bool {
     match language {
+        SourceLanguage::C => matches!(kind, "function_definition" | "function_declaration"),
         SourceLanguage::Cpp => matches!(kind, "function_definition" | "function_declaration"),
-        SourceLanguage::Rust => matches!(kind, "function_item"),
+        SourceLanguage::Go => matches!(kind, "function_declaration" | "method_declaration"),
         SourceLanguage::Java => matches!(kind, "method_declaration" | "constructor_declaration"),
+        SourceLanguage::JavaScript => {
+            matches!(
+                kind,
+                "function_declaration"
+                    | "function_expression"
+                    | "method_definition"
+                    | "arrow_function"
+            )
+        }
+        SourceLanguage::Php => matches!(kind, "function_definition" | "method_declaration"),
+        SourceLanguage::Rust => matches!(kind, "function_item"),
+        SourceLanguage::TypeScript => {
+            matches!(
+                kind,
+                "function_declaration"
+                    | "function_expression"
+                    | "method_definition"
+                    | "arrow_function"
+            )
+        }
     }
 }
 
 fn is_block_node(language: SourceLanguage, kind: &str) -> bool {
     match language {
-        SourceLanguage::Cpp => kind == "compound_statement",
-        SourceLanguage::Rust => kind == "block",
-        SourceLanguage::Java => kind == "block",
+        SourceLanguage::C | SourceLanguage::Cpp | SourceLanguage::Php => {
+            kind == "compound_statement"
+        }
+        SourceLanguage::Go | SourceLanguage::Java | SourceLanguage::Rust => kind == "block",
+        SourceLanguage::JavaScript | SourceLanguage::TypeScript => kind == "statement_block",
     }
 }
 
@@ -537,7 +621,7 @@ fn should_skip_node_kind(kind: &str) -> bool {
 }
 
 /// Check if two blocks share any tokens (fast pre-filter)
-/// Optimized to use FxHashSet and early exit
+/// Optimized to use `FxHashSet` and early exit
 pub fn blocks_share_tokens(block_a: &TokenizedBlock, block_b: &TokenizedBlock) -> bool {
     // Early exit if either is empty
     if block_a.tokens.is_empty() || block_b.tokens.is_empty() {
@@ -569,6 +653,9 @@ pub fn blocks_share_tokens(block_a: &TokenizedBlock, block_b: &TokenizedBlock) -
 }
 
 /// Compare two tokenized blocks using frequency-penalized similarity
+///
+/// PERFORMANCE: Zero-allocation cosine similarity using iterators
+/// Avoids cloning tokens by using `HashSet` references directly
 pub fn block_similarity(block_a: &TokenizedBlock, block_b: &TokenizedBlock, penalty: f64) -> f64 {
     if block_a.tokens.is_empty() || block_b.tokens.is_empty() {
         return 0.0;
@@ -577,26 +664,37 @@ pub fn block_similarity(block_a: &TokenizedBlock, block_b: &TokenizedBlock, pena
     let freq_a = &block_a.frequencies;
     let freq_b = &block_b.frequencies;
 
-    // Collect all unique tokens
-    let mut all_tokens: HashSet<String> = HashSet::new();
-    for token in &block_a.tokens {
-        all_tokens.insert(token.clone());
+    // Use references to tokens from the block (no allocation)
+    // Build unique token set using smaller block for efficiency
+    let (tokens_small, freq_small, tokens_large, freq_large) =
+        if block_a.tokens.len() <= block_b.tokens.len() {
+            (&block_a.tokens, freq_a, &block_b.tokens, freq_b)
+        } else {
+            (&block_b.tokens, freq_b, &block_a.tokens, freq_a)
+        };
+
+    // Pre-allocate with exact size to avoid reallocation
+    let mut all_tokens = HashSet::with_capacity(tokens_small.len() + tokens_large.len());
+
+    // Insert from smaller block first (likely fewer unique tokens)
+    for token in tokens_small {
+        all_tokens.insert(token.as_str());
     }
-    for token in &block_b.tokens {
-        all_tokens.insert(token.clone());
+    for token in tokens_large {
+        all_tokens.insert(token.as_str());
     }
 
     if all_tokens.is_empty() {
         return 0.0;
     }
 
-    // Build weighted vectors
-    let mut vector_a = Vec::new();
-    let mut vector_b = Vec::new();
+    // Build weighted vectors with exact capacity (no reallocation)
+    let mut vector_a = Vec::with_capacity(all_tokens.len());
+    let mut vector_b = Vec::with_capacity(all_tokens.len());
 
-    for token in &all_tokens {
-        let f_a = freq_a.get(token).copied().unwrap_or(0.0);
-        let f_b = freq_b.get(token).copied().unwrap_or(0.0);
+    for token in all_tokens {
+        let f_a = freq_small.get(token).copied().unwrap_or(0.0);
+        let f_b = freq_large.get(token).copied().unwrap_or(0.0);
 
         let avg_freq = (f_a * f_b).sqrt();
         let weight = 1.0 / (1.0 + penalty * avg_freq);

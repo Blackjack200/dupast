@@ -30,14 +30,14 @@ impl Parser {
 
             if path.is_file() {
                 if self.config.is_supported_extension(path.as_path()) {
-                    files.push(path.to_path_buf());
+                    files.push(path.clone());
                 }
             } else {
                 // Walk directory
                 let walker = WalkDir::new(path)
                     .follow_links(false)
                     .into_iter()
-                    .filter_entry(|e| !self.is_hidden(e));
+                    .filter_entry(|e| !is_hidden_dir_entry(e));
 
                 for entry in walker {
                     let entry = entry.map_err(|e| match e.into_io_error() {
@@ -67,19 +67,14 @@ impl Parser {
             }
         }
 
-        if files.is_empty() {
-            return Err(DupastError::NoFilesFound);
-        }
-
         Ok(files)
     }
+}
 
-    /// Check if a directory entry is hidden
-    fn is_hidden(&self, entry: &DirEntry) -> bool {
-        entry
-            .file_name()
-            .to_str()
-            .map(|s| s.starts_with('.'))
-            .unwrap_or(false)
-    }
+/// Check if a directory entry is hidden (standalone function for use in closures)
+fn is_hidden_dir_entry(entry: &DirEntry) -> bool {
+    entry
+        .file_name()
+        .to_str()
+        .is_some_and(|s| s.starts_with('.'))
 }

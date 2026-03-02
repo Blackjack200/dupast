@@ -15,11 +15,19 @@ pub enum DupastError {
     #[error("File not found: {0}")]
     FileNotFound(PathBuf),
 
-    #[error("No C++ files found in the specified paths")]
-    NoFilesFound,
+    #[error("No source files found\n\n{help}")]
+    NoFilesFound { help: String },
 
-    #[error("Invalid threshold value: {0}. Must be between 0.0 and 1.0")]
-    InvalidThreshold(f64),
+    #[allow(dead_code)] // Infrastructure for future validation features
+    #[error("Threshold must be between 0 and 100, got {value}\n\n{help}")]
+    InvalidThreshold { value: f64, help: String },
+
+    #[allow(dead_code)] // Infrastructure for future validation features
+    #[error("Frequency penalty must be between 0.0 and 10.0, got {value}\n\n{help}")]
+    InvalidFrequencyPenalty { value: f64, help: String },
+
+    #[error("Invalid output format '{format}'\n\n{help}")]
+    InvalidOutputFormat { format: String, help: String },
 
     #[error("Internal error: {0}")]
     Internal(String),
