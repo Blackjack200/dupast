@@ -46,7 +46,7 @@ tracing-subscriber = { version = "0", features = ["env-filter"] }
 
 # Path handling
 walkdir = "2"
-dirs = "5"
+dirs = "6"
 
 # Language parsing
 tree-sitter = "0"
